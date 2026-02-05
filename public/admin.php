@@ -1407,23 +1407,9 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
 <body>
     <div class="header">
         <h1>NXT Panel</h1>
-        <div class="db-info">
-            <?php if ($db): ?>
-                <?php if ($db instanceof mysqli): ?>
-                    Connected to: <?php echo htmlspecialchars($db->host_info); ?>
-                <?php elseif ($db instanceof PDO): ?>
-                    Connected via PDO
-                <?php endif; ?>
-                <?php if ($currentDatabase): ?>
-                    | Database: <strong><?php echo htmlspecialchars($currentDatabase); ?></strong>
-                <?php endif; ?>
-            <?php else: ?>
-                <span style="color: #ffc107;">⚠️ Not Connected</span>
-            <?php endif; ?>
-        </div>
     </div>
     
-            <?php if ($connectionError): ?>
+    <?php if ($connectionError): ?>
         <div class="error-box">
             <strong>Connection Error:</strong> <?php echo htmlspecialchars($connectionError); ?>
             <br><br>
