@@ -878,12 +878,26 @@ if ($db) {
         }
     }
     
-    // Get tables
+    // Get tables with record counts
+    $tableCounts = [];
     if ($db instanceof mysqli) {
         $result = $db->query("SHOW TABLES");
         if ($result) {
             while ($row = $result->fetch_array()) {
-                $tables[] = $row[0];
+                $tableName = $row[0];
+                $tables[] = $tableName;
+                
+                // Get record count for this table
+                try {
+                    $countResult = $db->query("SELECT COUNT(*) as count FROM `" . $db->real_escape_string($tableName) . "`");
+                    if ($countResult) {
+                        $countRow = $countResult->fetch_assoc();
+                        $tableCounts[$tableName] = intval($countRow['count'] ?? 0);
+                        $countResult->free();
+                    }
+                } catch (Exception $e) {
+                    $tableCounts[$tableName] = 0;
+                }
             }
             $result->free();
         }
@@ -891,6 +905,20 @@ if ($db) {
         $stmt = $db->query("SHOW TABLES");
         if ($stmt) {
             $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            
+            // Get record counts for all tables
+            foreach ($tables as $tableName) {
+                try {
+                    $countStmt = $db->query("SELECT COUNT(*) FROM `" . str_replace('`', '``', $tableName) . "`");
+                    if ($countStmt) {
+                        $tableCounts[$tableName] = intval($countStmt->fetchColumn());
+                    } else {
+                        $tableCounts[$tableName] = 0;
+                    }
+                } catch (Exception $e) {
+                    $tableCounts[$tableName] = 0;
+                }
+            }
         }
     }
 }
@@ -1457,6 +1485,9 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                         <li class="table-item <?php echo $table === $currentTable ? 'active' : ''; ?>">
                             <a href="?table=<?php echo urlencode($table); ?>">
                                 📊 <?php echo htmlspecialchars($table); ?>
+                                <span style="float: right; color: #6c757d; font-size: 12px; font-weight: normal;">
+                                    (<?php echo number_format($tableCounts[$table] ?? 0); ?>)
+                                </span>
                             </a>
                         </li>
                     <?php endforeach; ?>
