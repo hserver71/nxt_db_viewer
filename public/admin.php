@@ -647,6 +647,83 @@ if ($db && $action) {
             echo "-- Error: " . $e->getMessage();
         }
         exit;
+    } elseif ($action === 'get_columns' && !empty($currentTable) && $db) {
+        // AJAX endpoint to get column info
+        header('Content-Type: application/json');
+        try {
+            $columns = [];
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW COLUMNS FROM `" . $db->real_escape_string($currentTable) . "`");
+                if ($result) {
+                    while ($row = $result->fetch_assoc()) {
+                        $columns[] = $row;
+                    }
+                    $result->free();
+                }
+            } elseif ($db instanceof PDO) {
+                $stmt = $db->query("SHOW COLUMNS FROM `" . str_replace('`', '``', $currentTable) . "`");
+                if ($stmt) {
+                    $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
+            }
+            echo json_encode(['success' => true, 'columns' => $columns]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit;
+    } elseif ($action === 'get_record' && !empty($_GET['id']) && !empty($currentTable) && $db) {
+        // AJAX endpoint to get record data for editing
+        header('Content-Type: application/json');
+        try {
+            $primaryKey = null;
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW KEYS FROM `" . $db->real_escape_string($currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($result && $result->num_rows > 0) {
+                    $row = $result->fetch_assoc();
+                    $primaryKey = $row['Column_name'];
+                    $result->free();
+                }
+            } elseif ($db instanceof PDO) {
+                $stmt = $db->query("SHOW KEYS FROM `" . str_replace('`', '``', $currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($stmt) {
+                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        $primaryKey = $row['Column_name'];
+                    }
+                }
+            }
+            
+            if ($primaryKey) {
+                $id = $_GET['id'];
+                if ($db instanceof mysqli) {
+                    $stmt = $db->prepare("SELECT * FROM `" . $db->real_escape_string($currentTable) . "` WHERE `" . $db->real_escape_string($primaryKey) . "` = ?");
+                    $stmt->bind_param("s", $id);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    if ($result) {
+                        $record = $result->fetch_assoc();
+                        echo json_encode(['success' => true, 'record' => $record, 'primaryKey' => $primaryKey]);
+                    } else {
+                        echo json_encode(['success' => false, 'error' => 'Record not found']);
+                    }
+                    $stmt->close();
+                } else {
+                    $stmt = $db->prepare("SELECT * FROM `" . str_replace('`', '``', $currentTable) . "` WHERE `" . str_replace('`', '``', $primaryKey) . "` = ?");
+                    $stmt->execute([$id]);
+                    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($record) {
+                        echo json_encode(['success' => true, 'record' => $record, 'primaryKey' => $primaryKey]);
+                    } else {
+                        echo json_encode(['success' => false, 'error' => 'Record not found']);
+                    }
+                }
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Primary key not found']);
+            }
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit;
     } elseif ($action === 'export_db' && $db) {
         // Export entire database
         header('Content-Type: application/sql');
@@ -1627,8 +1704,10 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                                     <?php endforeach; ?>
                                     <td>
                                         <div style="display: flex; gap: 5px;">
-                                            <a href="?table=<?php echo urlencode($currentTable); ?>&action=edit&id=<?php echo urlencode($row[$primaryKey] ?? ''); ?>&page=<?php echo $currentPage; ?>" 
-                                               class="btn btn-small btn-edit" style="padding: 4px 8px; font-size: 11px;">✏️ Edit</a>
+                                            <a href="#" 
+                                               class="btn btn-small btn-edit" 
+                                               style="padding: 4px 8px; font-size: 11px;"
+                                               onclick="openEditModal('<?php echo urlencode($currentTable); ?>', '<?php echo urlencode($row[$primaryKey] ?? ''); ?>', <?php echo $currentPage; ?>); return false;">✏️ Edit</a>
                                             <a href="?table=<?php echo urlencode($currentTable); ?>&action=delete&id=<?php echo urlencode($row[$primaryKey] ?? ''); ?>&page=<?php echo $currentPage; ?>" 
                                                class="btn btn-small btn-delete" 
                                                style="padding: 4px 8px; font-size: 11px; background: #dc3545;"
@@ -1701,6 +1780,28 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
         </div>
     </div>
     
+    <!-- Modal for edit form -->
+    <div id="editModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3 id="editModalTitle">Edit Record</h3>
+                <span class="close" onclick="closeEditModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="editModalBody" style="max-height: 70vh; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px;">
+                    <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #667eea; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                    <p style="margin-top: 10px;">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+    
     <script>
         function showModal(fieldName, value) {
             document.getElementById('modalTitle').textContent = 'Field: ' + fieldName;
@@ -1728,8 +1829,134 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 closeModal();
+                closeEditModal();
             }
         });
+        
+        function openEditModal(table, id, page) {
+            document.getElementById('editModalTitle').textContent = 'Edit Record - ' + table;
+            document.getElementById('editModal').style.display = 'block';
+            document.getElementById('editModalBody').innerHTML = '<div style="text-align: center; padding: 20px;"><div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #667eea; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div><p style="margin-top: 10px;">Loading...</p></div>';
+            
+            // Fetch record data
+            fetch('?table=' + encodeURIComponent(table) + '&action=get_record&id=' + encodeURIComponent(id))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Get columns info (we'll need to fetch this or embed it)
+                        fetch('?table=' + encodeURIComponent(table) + '&action=get_columns')
+                            .then(response => response.json())
+                            .then(columnsData => {
+                                renderEditForm(table, data.record, data.primaryKey, columnsData.columns || [], page);
+                            })
+                            .catch(() => {
+                                // Fallback: render form without column details
+                                renderEditForm(table, data.record, data.primaryKey, [], page);
+                            });
+                    } else {
+                        document.getElementById('editModalBody').innerHTML = '<div class="error-box">Error: ' + (data.error || 'Failed to load record') + '</div>';
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('editModalBody').innerHTML = '<div class="error-box">Error loading record: ' + error.message + '</div>';
+                });
+        }
+        
+        function renderEditForm(table, record, primaryKey, columns, page) {
+            var formHtml = '<form id="editForm" method="POST" onsubmit="submitEditForm(event, \'' + table + '\', ' + page + ')">';
+            formHtml += '<input type="hidden" name="action" value="update">';
+            formHtml += '<input type="hidden" name="table" value="' + table + '">';
+            formHtml += '<input type="hidden" name="id" value="' + (record[primaryKey] || '') + '">';
+            formHtml += '<input type="hidden" name="page" value="' + page + '">';
+            
+            // If we have column info, use it; otherwise iterate over record keys
+            var fields = columns.length > 0 ? columns : Object.keys(record).map(key => ({Field: key, Type: 'varchar(255)', Null: 'YES'}));
+            
+            fields.forEach(function(col) {
+                var fieldName = col.Field || col;
+                var fieldType = (col.Type || 'varchar(255)').toLowerCase();
+                var isTextarea = fieldType.indexOf('text') !== -1 || fieldType.indexOf('blob') !== -1;
+                var value = record[fieldName] || '';
+                
+                if (fieldName === primaryKey) {
+                    formHtml += '<div class="form-group">';
+                    formHtml += '<label>' + fieldName + ' (Primary Key)</label>';
+                    formHtml += '<input type="text" value="' + escapeHtml(value) + '" disabled>';
+                    formHtml += '<small>Primary key cannot be edited</small>';
+                    formHtml += '</div>';
+                } else {
+                    formHtml += '<div class="form-group">';
+                    formHtml += '<label>' + fieldName + '</label>';
+                    if (isTextarea) {
+                        formHtml += '<textarea name="field_' + fieldName + '" rows="4">' + escapeHtml(value) + '</textarea>';
+                    } else {
+                        formHtml += '<input type="text" name="field_' + fieldName + '" value="' + escapeHtml(value) + '">';
+                    }
+                    formHtml += '<small>Type: ' + (col.Type || 'unknown') + '</small>';
+                    formHtml += '</div>';
+                }
+            });
+            
+            formHtml += '<div class="form-actions">';
+            formHtml += '<button type="submit" class="btn btn-primary">💾 Save Changes</button>';
+            formHtml += '<button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>';
+            formHtml += '</div>';
+            formHtml += '</form>';
+            
+            document.getElementById('editModalBody').innerHTML = formHtml;
+        }
+        
+        function escapeHtml(text) {
+            var map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+        
+        function submitEditForm(event, table, page) {
+            event.preventDefault();
+            var form = document.getElementById('editForm');
+            var formData = new FormData(form);
+            
+            fetch('?table=' + encodeURIComponent(table) + '&page=' + page, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(html => {
+                // Check if response is a redirect or success
+                if (html.indexOf('Record updated successfully') !== -1 || html.indexOf('msg=updated') !== -1) {
+                    closeEditModal();
+                    window.location.reload();
+                } else {
+                    // Show error or response
+                    document.getElementById('editModalBody').innerHTML = '<div class="error-box">Error updating record. Please try again.</div>' + form.outerHTML;
+                }
+            })
+            .catch(error => {
+                document.getElementById('editModalBody').innerHTML = '<div class="error-box">Error: ' + error.message + '</div>';
+            });
+        }
+        
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+        
+        // Close edit modal when clicking outside
+        window.onclick = function(event) {
+            var valueModal = document.getElementById('valueModal');
+            var editModal = document.getElementById('editModal');
+            if (event.target == valueModal) {
+                closeModal();
+            }
+            if (event.target == editModal) {
+                closeEditModal();
+            }
+        }
     </script>
 </body>
 </html>
