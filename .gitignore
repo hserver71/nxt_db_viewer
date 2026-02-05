@@ -1,0 +1,31 @@
+# Sensitive configuration files
+config
+*.lic
+server.lic
+
+# Cache and temporary files
+cache/
+tmp/
+logs/
+storage/
+
+# Database credentials
+dbviewer_config.php
+
+# Binary files
+*.so
+*.bin
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PHP compiled files
+*.php.bak
