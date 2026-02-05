@@ -1,6 +1,5 @@
 <?php
 /**
- * Simple Database Viewer for NXT Panel
  * Similar to phpMyAdmin - shows tables and records
  */
 
@@ -896,7 +895,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Viewer - NXT Panel</title>
+    <title>NXT Panel</title>
     <style>
         * {
             margin: 0;
@@ -1218,9 +1217,79 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
             white-space: nowrap;
         }
         
-        .cell-content:hover {
-            white-space: normal;
+        .cell-content.large-value {
+            cursor: pointer;
+            color: #667eea;
+            text-decoration: underline;
+        }
+        
+        .cell-content.large-value:hover {
+            color: #5568d3;
+        }
+        
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            color: #495057;
+        }
+        
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 20px;
+        }
+        
+        .close:hover,
+        .close:focus {
+            color: #000;
+            text-decoration: none;
+        }
+        
+        .modal-body {
             word-break: break-all;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            max-height: 60vh;
+            overflow-y: auto;
         }
         
         .no-tables {
@@ -1232,7 +1301,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
 </head>
 <body>
     <div class="header">
-        <h1>🗄️ Database Viewer</h1>
+        <h1>NXT Panel</h1>
         <div class="db-info">
             <?php if ($db): ?>
                 <?php if ($db instanceof mysqli): ?>
@@ -1528,17 +1597,31 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                                 <tr>
                                     <?php foreach ($columns as $col): ?>
                                         <td>
-                                            <div class="cell-content" title="<?php echo htmlspecialchars($row[$col['Field']] ?? ''); ?>">
-                                                <?php 
-                                                $value = $row[$col['Field']] ?? '';
-                                                if ($value === null) {
-                                                    echo '<em style="color: #999;">NULL</em>';
-                                                } elseif ($value === '') {
-                                                    echo '<em style="color: #999;">(empty)</em>';
-                                                } else {
-                                                    echo htmlspecialchars($value);
+                                            <?php 
+                                            $value = $row[$col['Field']] ?? '';
+                                            $valueLength = strlen($value);
+                                            $isLarge = $valueLength > 50;
+                                            $displayValue = $value;
+                                            
+                                            if ($value === null) {
+                                                $displayValue = '<em style="color: #999;">NULL</em>';
+                                            } elseif ($value === '') {
+                                                $displayValue = '<em style="color: #999;">(empty)</em>';
+                                            } else {
+                                                $displayValue = htmlspecialchars($value);
+                                                if ($isLarge) {
+                                                    $displayValue = htmlspecialchars(substr($value, 0, 50)) . '...';
                                                 }
-                                                ?>
+                                            }
+                                            ?>
+                                            <div class="cell-content <?php echo $isLarge ? 'large-value' : ''; ?>" 
+                                                 <?php if ($isLarge): ?>
+                                                     data-field="<?php echo htmlspecialchars($col['Field'], ENT_QUOTES); ?>"
+                                                     data-value="<?php echo base64_encode($value); ?>"
+                                                     onclick="showModal(this.dataset.field, atob(this.dataset.value))"
+                                                 <?php endif; ?>
+                                                 title="<?php echo htmlspecialchars($row[$col['Field']] ?? ''); ?>">
+                                                <?php echo $displayValue; ?>
                                             </div>
                                         </td>
                                     <?php endforeach; ?>
@@ -1606,5 +1689,47 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
             <?php endif; ?>
         </div>
     </div>
+    
+    <!-- Modal for large values -->
+    <div id="valueModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Value</h3>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+    
+    <script>
+        function showModal(fieldName, value) {
+            document.getElementById('modalTitle').textContent = 'Field: ' + fieldName;
+            var displayValue = value || '(empty)';
+            if (value === 'null' || value === 'NULL') {
+                displayValue = 'NULL';
+            }
+            document.getElementById('modalBody').textContent = displayValue;
+            document.getElementById('valueModal').style.display = 'block';
+        }
+        
+        function closeModal() {
+            document.getElementById('valueModal').style.display = 'none';
+        }
+        
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+            var modal = document.getElementById('valueModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+        
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
 </body>
 </html>
