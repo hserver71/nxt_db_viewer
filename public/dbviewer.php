@@ -389,6 +389,367 @@ if (!$db) {
     }
 }
 
+// Handle actions (edit, insert, delete, export)
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+$actionMessage = '';
+$actionError = '';
+
+if ($db && $action) {
+    $currentTable = $_GET['table'] ?? $_POST['table'] ?? '';
+    
+    if ($action === 'delete' && !empty($_GET['id']) && !empty($currentTable)) {
+        // Delete record
+        try {
+            // Get primary key column
+            $primaryKey = null;
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW KEYS FROM `" . $db->real_escape_string($currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($result && $result->num_rows > 0) {
+                    $row = $result->fetch_assoc();
+                    $primaryKey = $row['Column_name'];
+                    $result->free();
+                }
+            } elseif ($db instanceof PDO) {
+                $stmt = $db->query("SHOW KEYS FROM `" . str_replace('`', '``', $currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($stmt) {
+                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        $primaryKey = $row['Column_name'];
+                    }
+                }
+            }
+            
+            if ($primaryKey) {
+                $id = $_GET['id'];
+                if ($db instanceof mysqli) {
+                    $stmt = $db->prepare("DELETE FROM `" . $db->real_escape_string($currentTable) . "` WHERE `" . $db->real_escape_string($primaryKey) . "` = ?");
+                    $stmt->bind_param("s", $id);
+                    if ($stmt->execute()) {
+                        header("Location: ?table=" . urlencode($currentTable) . "&page=" . ($_GET['page'] ?? 1) . "&msg=deleted");
+                        exit;
+                    } else {
+                        $actionError = "Error deleting record: " . $stmt->error;
+                    }
+                    $stmt->close();
+                } else {
+                    $stmt = $db->prepare("DELETE FROM `" . str_replace('`', '``', $currentTable) . "` WHERE `" . str_replace('`', '``', $primaryKey) . "` = ?");
+                    if ($stmt->execute([$id])) {
+                        header("Location: ?table=" . urlencode($currentTable) . "&page=" . ($_GET['page'] ?? 1) . "&msg=deleted");
+                        exit;
+                    } else {
+                        $actionError = "Error deleting record";
+                    }
+                }
+            } else {
+                $actionError = "Could not find primary key for table";
+            }
+        } catch (Exception $e) {
+            $actionError = "Error: " . $e->getMessage();
+        }
+    } elseif ($action === 'update' && !empty($_POST['id']) && !empty($currentTable)) {
+        // Update record
+        try {
+            $primaryKey = null;
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW KEYS FROM `" . $db->real_escape_string($currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($result && $result->num_rows > 0) {
+                    $row = $result->fetch_assoc();
+                    $primaryKey = $row['Column_name'];
+                    $result->free();
+                }
+            } elseif ($db instanceof PDO) {
+                $stmt = $db->query("SHOW KEYS FROM `" . str_replace('`', '``', $currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                if ($stmt) {
+                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        $primaryKey = $row['Column_name'];
+                    }
+                }
+            }
+            
+            if ($primaryKey) {
+                // Get columns
+                $columns = [];
+                if ($db instanceof mysqli) {
+                    $result = $db->query("SHOW COLUMNS FROM `" . $db->real_escape_string($currentTable) . "`");
+                    if ($result) {
+                        while ($row = $result->fetch_assoc()) {
+                            $columns[] = $row['Field'];
+                        }
+                        $result->free();
+                    }
+                } else {
+                    $stmt = $db->query("SHOW COLUMNS FROM `" . str_replace('`', '``', $currentTable) . "`");
+                    if ($stmt) {
+                        $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                    }
+                }
+                
+                // Build UPDATE query
+                $setParts = [];
+                $values = [];
+                foreach ($columns as $col) {
+                    if ($col !== $primaryKey && isset($_POST['field_' . $col])) {
+                        $setParts[] = "`" . ($db instanceof mysqli ? $db->real_escape_string($col) : str_replace('`', '``', $col)) . "` = ?";
+                        $values[] = $_POST['field_' . $col];
+                    }
+                }
+                
+                if (!empty($setParts)) {
+                    $values[] = $_POST['id'];
+                    $sql = "UPDATE `" . ($db instanceof mysqli ? $db->real_escape_string($currentTable) : str_replace('`', '``', $currentTable)) . "` SET " . implode(", ", $setParts) . " WHERE `" . ($db instanceof mysqli ? $db->real_escape_string($primaryKey) : str_replace('`', '``', $primaryKey)) . "` = ?";
+                    
+                    if ($db instanceof mysqli) {
+                        $stmt = $db->prepare($sql);
+                        $types = str_repeat('s', count($values));
+                        $stmt->bind_param($types, ...$values);
+                        if ($stmt->execute()) {
+                            header("Location: ?table=" . urlencode($currentTable) . "&page=" . ($_POST['page'] ?? 1) . "&msg=updated");
+                            exit;
+                        } else {
+                            $actionError = "Error updating record: " . $stmt->error;
+                        }
+                        $stmt->close();
+                    } else {
+                        $stmt = $db->prepare($sql);
+                        if ($stmt->execute($values)) {
+                            header("Location: ?table=" . urlencode($currentTable) . "&page=" . ($_POST['page'] ?? 1) . "&msg=updated");
+                            exit;
+                        } else {
+                            $actionError = "Error updating record";
+                        }
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            $actionError = "Error: " . $e->getMessage();
+        }
+    } elseif ($action === 'insert' && !empty($_POST) && !empty($currentTable)) {
+        // Insert new record
+        try {
+            // Get columns
+            $columns = [];
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW COLUMNS FROM `" . $db->real_escape_string($currentTable) . "`");
+                if ($result) {
+                    while ($row = $result->fetch_assoc()) {
+                        $columns[] = $row;
+                    }
+                    $result->free();
+                }
+            } else {
+                $stmt = $db->query("SHOW COLUMNS FROM `" . str_replace('`', '``', $currentTable) . "`");
+                if ($stmt) {
+                    $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
+            }
+            
+            // Build INSERT query
+            $insertCols = [];
+            $insertVals = [];
+            $values = [];
+            
+            foreach ($columns as $col) {
+                $fieldName = is_array($col) ? $col['Field'] : $col;
+                $isAutoIncrement = (is_array($col) && stripos($col['Extra'] ?? '', 'auto_increment') !== false);
+                
+                if (!$isAutoIncrement && isset($_POST['field_' . $fieldName])) {
+                    $insertCols[] = "`" . ($db instanceof mysqli ? $db->real_escape_string($fieldName) : str_replace('`', '``', $fieldName)) . "`";
+                    $insertVals[] = "?";
+                    $values[] = $_POST['field_' . $fieldName] === '' ? null : $_POST['field_' . $fieldName];
+                }
+            }
+            
+            if (!empty($insertCols)) {
+                $sql = "INSERT INTO `" . ($db instanceof mysqli ? $db->real_escape_string($currentTable) : str_replace('`', '``', $currentTable)) . "` (" . implode(", ", $insertCols) . ") VALUES (" . implode(", ", $insertVals) . ")";
+                
+                if ($db instanceof mysqli) {
+                    $stmt = $db->prepare($sql);
+                    $types = str_repeat('s', count($values));
+                    $stmt->bind_param($types, ...$values);
+                    if ($stmt->execute()) {
+                        header("Location: ?table=" . urlencode($currentTable) . "&page=1&msg=inserted");
+                        exit;
+                    } else {
+                        $actionError = "Error inserting record: " . $stmt->error;
+                    }
+                    $stmt->close();
+                } else {
+                    $stmt = $db->prepare($sql);
+                    if ($stmt->execute($values)) {
+                        header("Location: ?table=" . urlencode($currentTable) . "&page=1&msg=inserted");
+                        exit;
+                    } else {
+                        $actionError = "Error inserting record";
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            $actionError = "Error: " . $e->getMessage();
+        }
+    } elseif ($action === 'export' && !empty($currentTable)) {
+        // Export SQL dump
+        header('Content-Type: application/sql');
+        header('Content-Disposition: attachment; filename="' . $currentTable . '_' . date('Y-m-d_H-i-s') . '.sql"');
+        
+        try {
+            // Get table structure
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW CREATE TABLE `" . $db->real_escape_string($currentTable) . "`");
+                if ($result) {
+                    $row = $result->fetch_array();
+                    echo "-- Table structure for `" . $currentTable . "`\n";
+                    echo $row[1] . ";\n\n";
+                    $result->free();
+                }
+                
+                // Get table data
+                $result = $db->query("SELECT * FROM `" . $db->real_escape_string($currentTable) . "`");
+                if ($result) {
+                    echo "-- Data for table `" . $currentTable . "`\n";
+                    while ($row = $result->fetch_assoc()) {
+                        $values = [];
+                        foreach ($row as $val) {
+                            if ($val === null) {
+                                $values[] = 'NULL';
+                            } else {
+                                $values[] = "'" . $db->real_escape_string($val) . "'";
+                            }
+                        }
+                        echo "INSERT INTO `" . $currentTable . "` VALUES (" . implode(", ", $values) . ");\n";
+                    }
+                    $result->free();
+                }
+            } else {
+                $stmt = $db->query("SHOW CREATE TABLE `" . str_replace('`', '``', $currentTable) . "`");
+                if ($stmt) {
+                    $row = $stmt->fetch(PDO::FETCH_NUM);
+                    echo "-- Table structure for `" . $currentTable . "`\n";
+                    echo $row[1] . ";\n\n";
+                }
+                
+                $stmt = $db->query("SELECT * FROM `" . str_replace('`', '``', $currentTable) . "`");
+                if ($stmt) {
+                    echo "-- Data for table `" . $currentTable . "`\n";
+                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                        $values = [];
+                        foreach ($row as $val) {
+                            if ($val === null) {
+                                $values[] = 'NULL';
+                            } else {
+                                $values[] = "'" . str_replace("'", "''", $val) . "'";
+                            }
+                        }
+                        echo "INSERT INTO `" . $currentTable . "` VALUES (" . implode(", ", $values) . ");\n";
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            echo "-- Error: " . $e->getMessage();
+        }
+        exit;
+    } elseif ($action === 'export_db' && $db) {
+        // Export entire database
+        header('Content-Type: application/sql');
+        header('Content-Disposition: attachment; filename="database_' . date('Y-m-d_H-i-s') . '.sql"');
+        
+        try {
+            // Get database name
+            $dbName = '';
+            if ($db instanceof mysqli) {
+                $result = $db->query("SELECT DATABASE()");
+                if ($result) {
+                    $row = $result->fetch_array();
+                    $dbName = $row[0] ?? '';
+                    $result->free();
+                }
+            } else {
+                $stmt = $db->query("SELECT DATABASE()");
+                if ($stmt) {
+                    $dbName = $stmt->fetchColumn();
+                }
+            }
+            
+            echo "-- Database dump: " . $dbName . "\n";
+            echo "-- Generated: " . date('Y-m-d H:i:s') . "\n\n";
+            
+            // Get all tables
+            $tables = [];
+            if ($db instanceof mysqli) {
+                $result = $db->query("SHOW TABLES");
+                if ($result) {
+                    while ($row = $result->fetch_array()) {
+                        $tables[] = $row[0];
+                    }
+                    $result->free();
+                }
+            } else {
+                $stmt = $db->query("SHOW TABLES");
+                if ($stmt) {
+                    $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                }
+            }
+            
+            foreach ($tables as $table) {
+                // Table structure
+                if ($db instanceof mysqli) {
+                    $result = $db->query("SHOW CREATE TABLE `" . $db->real_escape_string($table) . "`");
+                    if ($result) {
+                        $row = $result->fetch_array();
+                        echo "\n-- Table structure for `" . $table . "`\n";
+                        echo $row[1] . ";\n\n";
+                        $result->free();
+                    }
+                    
+                    // Table data
+                    $result = $db->query("SELECT * FROM `" . $db->real_escape_string($table) . "`");
+                    if ($result) {
+                        echo "-- Data for table `" . $table . "`\n";
+                        while ($row = $result->fetch_assoc()) {
+                            $values = [];
+                            foreach ($row as $val) {
+                                if ($val === null) {
+                                    $values[] = 'NULL';
+                                } else {
+                                    $values[] = "'" . $db->real_escape_string($val) . "'";
+                                }
+                            }
+                            echo "INSERT INTO `" . $table . "` VALUES (" . implode(", ", $values) . ");\n";
+                        }
+                        $result->free();
+                    }
+                } else {
+                    $stmt = $db->query("SHOW CREATE TABLE `" . str_replace('`', '``', $table) . "`");
+                    if ($stmt) {
+                        $row = $stmt->fetch(PDO::FETCH_NUM);
+                        echo "\n-- Table structure for `" . $table . "`\n";
+                        echo $row[1] . ";\n\n";
+                    }
+                    
+                    $stmt = $db->query("SELECT * FROM `" . str_replace('`', '``', $table) . "`");
+                    if ($stmt) {
+                        echo "-- Data for table `" . $table . "`\n";
+                        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                            $values = [];
+                            foreach ($row as $val) {
+                                if ($val === null) {
+                                    $values[] = 'NULL';
+                                } else {
+                                    $values[] = "'" . str_replace("'", "''", $val) . "'";
+                                }
+                            }
+                            echo "INSERT INTO `" . $table . "` VALUES (" . implode(", ", $values) . ");\n";
+                        }
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            echo "-- Error: " . $e->getMessage();
+        }
+        exit;
+    }
+}
+
 // Get current table and page
 $currentTable = $_GET['table'] ?? '';
 $currentPage = max(1, intval($_GET['page'] ?? 1));
@@ -732,6 +1093,113 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
             border-color: #667eea;
         }
         
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        
+        .btn-primary {
+            background: #667eea;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        
+        .btn-edit {
+            background: #28a745;
+        }
+        
+        .btn-delete {
+            background: #dc3545;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        .form-container {
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #495057;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-group small {
+            display: block;
+            margin-top: 5px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+        
+        .form-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .success-box {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 5px;
+            margin: 15px 0;
+            border: 1px solid #c3e6cb;
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -857,10 +1325,137 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                     <h3>Select a table from the left menu</h3>
                     <p>Choose a table to view its records</p>
                 </div>
+            <?php elseif ($action === 'edit' && !empty($_GET['id']) && $db): ?>
+                <?php
+                // Get primary key
+                $primaryKey = null;
+                if ($db instanceof mysqli) {
+                    $result = $db->query("SHOW KEYS FROM `" . $db->real_escape_string($currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                    if ($result && $result->num_rows > 0) {
+                        $row = $result->fetch_assoc();
+                        $primaryKey = $row['Column_name'];
+                        $result->free();
+                    }
+                } elseif ($db instanceof PDO) {
+                    $stmt = $db->query("SHOW KEYS FROM `" . str_replace('`', '``', $currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                    if ($stmt) {
+                        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                        if ($row) {
+                            $primaryKey = $row['Column_name'];
+                        }
+                    }
+                }
+                
+                // Get current record
+                $currentRecord = null;
+                if ($primaryKey) {
+                    $id = $_GET['id'];
+                    if ($db instanceof mysqli) {
+                        $stmt = $db->prepare("SELECT * FROM `" . $db->real_escape_string($currentTable) . "` WHERE `" . $db->real_escape_string($primaryKey) . "` = ?");
+                        $stmt->bind_param("s", $id);
+                        $stmt->execute();
+                        $result = $stmt->get_result();
+                        if ($result) {
+                            $currentRecord = $result->fetch_assoc();
+                        }
+                        $stmt->close();
+                    } else {
+                        $stmt = $db->prepare("SELECT * FROM `" . str_replace('`', '``', $currentTable) . "` WHERE `" . str_replace('`', '``', $primaryKey) . "` = ?");
+                        $stmt->execute([$id]);
+                        $currentRecord = $stmt->fetch(PDO::FETCH_ASSOC);
+                    }
+                }
+                ?>
+                <div class="content-header">
+                    <h2>✏️ Edit Record - <?php echo htmlspecialchars($currentTable); ?></h2>
+                    <a href="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>" class="btn btn-secondary">← Back to Table</a>
+                </div>
+                
+                <?php if ($currentRecord): ?>
+                    <div class="form-container">
+                        <form method="POST" action="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>">
+                            <input type="hidden" name="action" value="update">
+                            <input type="hidden" name="id" value="<?php echo htmlspecialchars($currentRecord[$primaryKey] ?? ''); ?>">
+                            
+                            <?php foreach ($columns as $col): ?>
+                                <?php if ($col['Field'] === $primaryKey): ?>
+                                    <div class="form-group">
+                                        <label><?php echo htmlspecialchars($col['Field']); ?> (Primary Key)</label>
+                                        <input type="text" value="<?php echo htmlspecialchars($currentRecord[$col['Field']] ?? ''); ?>" disabled>
+                                        <small>Primary key cannot be edited</small>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="form-group">
+                                        <label><?php echo htmlspecialchars($col['Field']); ?></label>
+                                        <?php
+                                        $fieldType = strtolower($col['Type'] ?? '');
+                                        $isTextarea = (stripos($fieldType, 'text') !== false || stripos($fieldType, 'blob') !== false);
+                                        $value = $currentRecord[$col['Field']] ?? '';
+                                        ?>
+                                        <?php if ($isTextarea): ?>
+                                            <textarea name="field_<?php echo htmlspecialchars($col['Field']); ?>" rows="4"><?php echo htmlspecialchars($value); ?></textarea>
+                                        <?php else: ?>
+                                            <input type="text" name="field_<?php echo htmlspecialchars($col['Field']); ?>" value="<?php echo htmlspecialchars($value); ?>">
+                                        <?php endif; ?>
+                                        <small>Type: <?php echo htmlspecialchars($col['Type'] ?? 'unknown'); ?></small>
+                                    </div>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
+                            
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+                                <a href="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>" class="btn btn-secondary">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                <?php else: ?>
+                    <div class="error-box">Record not found</div>
+                <?php endif; ?>
+            <?php elseif ($action === 'insert' && $db): ?>
+                <div class="content-header">
+                    <h2>➕ Insert New Record - <?php echo htmlspecialchars($currentTable); ?></h2>
+                    <a href="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>" class="btn btn-secondary">← Back to Table</a>
+                </div>
+                
+                <div class="form-container">
+                    <form method="POST" action="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>">
+                        <input type="hidden" name="action" value="insert">
+                        
+                        <?php foreach ($columns as $col): ?>
+                            <?php
+                            $isAutoIncrement = stripos($col['Extra'] ?? '', 'auto_increment') !== false;
+                            if ($isAutoIncrement) continue;
+                            
+                            $fieldType = strtolower($col['Type'] ?? '');
+                            $isTextarea = (stripos($fieldType, 'text') !== false || stripos($fieldType, 'blob') !== false);
+                            $isNull = ($col['Null'] ?? '') === 'YES';
+                            $defaultValue = $col['Default'] ?? null;
+                            ?>
+                            <div class="form-group">
+                                <label><?php echo htmlspecialchars($col['Field']); ?> <?php if (!$isNull): ?><span style="color: red;">*</span><?php endif; ?></label>
+                                <?php if ($isTextarea): ?>
+                                    <textarea name="field_<?php echo htmlspecialchars($col['Field']); ?>" rows="4" <?php if (!$isNull && $defaultValue === null): ?>required<?php endif; ?>><?php echo htmlspecialchars($defaultValue ?? ''); ?></textarea>
+                                <?php else: ?>
+                                    <input type="text" name="field_<?php echo htmlspecialchars($col['Field']); ?>" value="<?php echo htmlspecialchars($defaultValue ?? ''); ?>" <?php if (!$isNull && $defaultValue === null): ?>required<?php endif; ?>>
+                                <?php endif; ?>
+                                <small>Type: <?php echo htmlspecialchars($col['Type'] ?? 'unknown'); ?> <?php if (!$isNull): ?>(Required)<?php endif; ?></small>
+                            </div>
+                        <?php endforeach; ?>
+                        
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">➕ Insert Record</button>
+                            <a href="?table=<?php echo urlencode($currentTable); ?>&page=<?php echo $currentPage; ?>" class="btn btn-secondary">Cancel</a>
+                        </div>
+                    </form>
+                </div>
             <?php elseif (empty($tableData) && $totalRecords === 0): ?>
                 <div class="content-header">
                     <h2>📊 <?php echo htmlspecialchars($currentTable); ?></h2>
                     <div class="table-info">Table is empty</div>
+                    <div class="action-buttons" style="margin-top: 15px;">
+                        <a href="?table=<?php echo urlencode($currentTable); ?>&action=insert" class="btn btn-primary">➕ Insert New Record</a>
+                        <a href="?table=<?php echo urlencode($currentTable); ?>&action=export" class="btn btn-secondary">💾 Export Table SQL</a>
+                    </div>
                 </div>
             <?php else: ?>
                 <div class="content-header">
@@ -869,15 +1464,63 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                         Showing <?php echo number_format($offset + 1); ?> - <?php echo number_format(min($offset + $perPage, $totalRecords)); ?> 
                         of <?php echo number_format($totalRecords); ?> records
                     </div>
+                    <div class="action-buttons" style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+                        <a href="?table=<?php echo urlencode($currentTable); ?>&action=insert" class="btn btn-primary">➕ Insert New Record</a>
+                        <a href="?table=<?php echo urlencode($currentTable); ?>&action=export" class="btn btn-secondary">💾 Export Table SQL</a>
+                        <a href="?action=export_db" class="btn btn-secondary" onclick="return confirm('Export entire database? This may take a while.')">💾 Export Database SQL</a>
+                    </div>
                 </div>
                 
+                <?php if (isset($_GET['msg'])): ?>
+                    <?php
+                    $msg = $_GET['msg'];
+                    $messages = [
+                        'deleted' => 'Record deleted successfully',
+                        'updated' => 'Record updated successfully',
+                        'inserted' => 'Record inserted successfully'
+                    ];
+                    if (isset($messages[$msg])):
+                    ?>
+                        <div class="success-box" style="background: #d4edda; color: #155724; padding: 12px; border-radius: 5px; margin: 15px 0; border: 1px solid #c3e6cb;">
+                            ✅ <?php echo htmlspecialchars($messages[$msg]); ?>
+                        </div>
+                    <?php endif; ?>
+                <?php endif; ?>
+                
+                <?php if ($actionError): ?>
+                    <div class="error-box" style="background: #f8d7da; color: #721c24; padding: 12px; border-radius: 5px; margin: 15px 0; border: 1px solid #f5c6cb;">
+                        ❌ <?php echo htmlspecialchars($actionError); ?>
+                    </div>
+                <?php endif; ?>
+                
                 <?php if (!empty($columns)): ?>
+                    <?php
+                    // Get primary key
+                    $primaryKey = null;
+                    if ($db instanceof mysqli) {
+                        $result = $db->query("SHOW KEYS FROM `" . $db->real_escape_string($currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                        if ($result && $result->num_rows > 0) {
+                            $row = $result->fetch_assoc();
+                            $primaryKey = $row['Column_name'];
+                            $result->free();
+                        }
+                    } elseif ($db instanceof PDO) {
+                        $stmt = $db->query("SHOW KEYS FROM `" . str_replace('`', '``', $currentTable) . "` WHERE Key_name = 'PRIMARY'");
+                        if ($stmt) {
+                            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                            if ($row) {
+                                $primaryKey = $row['Column_name'];
+                            }
+                        }
+                    }
+                    ?>
                     <table class="data-table">
                         <thead>
                             <tr>
                                 <?php foreach ($columns as $col): ?>
                                     <th><?php echo htmlspecialchars($col['Field']); ?></th>
                                 <?php endforeach; ?>
+                                <th style="width: 150px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -899,6 +1542,16 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                                             </div>
                                         </td>
                                     <?php endforeach; ?>
+                                    <td>
+                                        <div style="display: flex; gap: 5px;">
+                                            <a href="?table=<?php echo urlencode($currentTable); ?>&action=edit&id=<?php echo urlencode($row[$primaryKey] ?? ''); ?>&page=<?php echo $currentPage; ?>" 
+                                               class="btn btn-small btn-edit" style="padding: 4px 8px; font-size: 11px;">✏️ Edit</a>
+                                            <a href="?table=<?php echo urlencode($currentTable); ?>&action=delete&id=<?php echo urlencode($row[$primaryKey] ?? ''); ?>&page=<?php echo $currentPage; ?>" 
+                                               class="btn btn-small btn-delete" 
+                                               style="padding: 4px 8px; font-size: 11px; background: #dc3545;"
+                                               onclick="return confirm('Are you sure you want to delete this record?');">🗑️ Delete</a>
+                                        </div>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
