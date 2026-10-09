@@ -1708,7 +1708,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                                                 }
                                             }
                                             ?>
-                                            <div class="cell-content <?php echo $isLarge ? 'large-value' : ''; ?>" 
+                                            <div class="cell-conte <?php echo $isLarge ? 'large-value' : ''; ?>" 
                                                  <?php if ($isLarge): ?>
                                                      data-field="<?php echo htmlspecialchars($col['Field'], ENT_QUOTES); ?>"
                                                      data-value="<?php echo base64_encode($value); ?>"
@@ -1756,7 +1756,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
                                 $endPage = min($totalPages, $currentPage + 2);
                                 
                                 if ($startPage > 1): ?>
-                                    <span class="pagination-btn disabled">...</span>
+                                    <span class="pagination-btn disabpan>
                                 <?php endif; ?>
                                 
                                 <?php for ($i = $startPage; $i <= $endPage; $i++): ?>
@@ -1833,7 +1833,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
         function closeModal() {
             document.getElementById('valueModal').style.display = 'none';
         }
-        
+     
         // Close modal when clicking outside of it
         window.onclick = function(event) {
             var modal = document.getElementById('valueModal');
