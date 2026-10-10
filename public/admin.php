@@ -1,18 +1,29 @@
 <?php
 /**
  * Similar to phpMyAdmin - shows tables and records
+ * Uses fixed NXT paths under /home/nxt (script itself can live anywhere).
  */
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Load configuration if exists
-$configFile = __DIR__ . '/dbviewer_config.php';
+// Only serve when URI path matches this file's name (e.g. /2k03-ww34-dkew-2341-kk)
+$adminRequestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+$adminRequestPath = rawurldecode($adminRequestPath ?: '/');
+$adminRequestPath = rtrim($adminRequestPath, '/') ?: '/';
+$adminAllowedPath = '/' . basename(__FILE__);
+if ($adminRequestPath !== $adminAllowedPath) {
+    http_response_code(404);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Not Found';
+    return true;
+}
+
+$configFile = '/home/nxt/public/dbviewer_config.php';
 $config = [];
 if (file_exists($configFile)) {
     $config = require $configFile;
 } else {
-    // Default config
     $config = [
         'type' => 'mysqli',
         'host' => 'localhost',
@@ -22,52 +33,52 @@ if (file_exists($configFile)) {
         'database' => '',
         'socket' => '',
         'auto_detect' => true,
-        'use_config_file' => true,  // Try to use /home/nxt/config
+        'use_config_file' => true,
     ];
 }
 
+$appLoaded = false;
+
 // Load the connection if auto-detect is enabled
 if ($config['auto_detect'] ?? true) {
-    // Set server variables needed for App.php - it might check the script name
-    if (!isset($_SERVER['REQUEST_SCHEME'])) {
-        $_SERVER['REQUEST_SCHEME'] = 'http';
+    if (empty($_SERVER['REQUEST_SCHEME'])) {
+        $_SERVER['REQUEST_SCHEME'] = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     }
-    if (!isset($_SERVER['HTTP_HOST'])) {
+    if (empty($_SERVER['HTTP_HOST'])) {
         $_SERVER['HTTP_HOST'] = $_SERVER['SERVER_NAME'] ?? 'localhost';
     }
-    // Set SCRIPT_NAME to match how the application expects it
-    if (!isset($_SERVER['SCRIPT_NAME'])) {
+    if (empty($_SERVER['SCRIPT_NAME'])) {
         $_SERVER['SCRIPT_NAME'] = '/public/dbviewer.php';
     }
-    if (!isset($_SERVER['PHP_SELF'])) {
+    if (empty($_SERVER['PHP_SELF'])) {
         $_SERVER['PHP_SELF'] = '/public/dbviewer.php';
     }
-    if (!isset($_SERVER['REQUEST_URI'])) {
+    if (empty($_SERVER['REQUEST_URI'])) {
         $_SERVER['REQUEST_URI'] = '/dbviewer.php';
     }
-    
-    require_once __DIR__ . '/../app/libs/connection.php';
-    
-    // Load App.php - it might create the connection automatically based on script name
-    if (file_exists(__DIR__ . '/../app/libs/App.php')) {
+
+    require_once '/home/nxt/app/libs/connection.php';
+
+    if (file_exists('/home/nxt/app/libs/App.php')) {
         try {
-            require_once __DIR__ . '/../app/libs/App.php';
+            require_once '/home/nxt/app/libs/App.php';
+            $appLoaded = true;
         } catch (Exception $e) {
             // Continue without App.php
         }
     }
-    
-    require_once __DIR__ . '/../app/libs/helpers.php';
-    
+
+    require_once '/home/nxt/app/libs/helpers.php';
+
     // Try to read and decrypt config file if it exists
     if (($config['use_config_file'] ?? true) && file_exists('/home/nxt/config')) {
         $encryptedConfig = file_get_contents('/home/nxt/config');
-        
+
         // Try to decrypt using decrypt_with_migration function (this is the correct one!)
         if (function_exists('decrypt_with_migration') && !empty($encryptedConfig)) {
             try {
                 $decryptedConfig = decrypt_with_migration($encryptedConfig);
-                
+
                 if (!empty($decryptedConfig)) {
                     // The decrypted config is JSON format
                     $json = json_decode($decryptedConfig, true);
@@ -82,14 +93,14 @@ if ($config['auto_detect'] ?? true) {
                         // If not JSON, try colon-separated format
                         $separators = [':', '|', ',', ';', "\n", "\t"];
                         $parts = [];
-                        
+
                         foreach ($separators as $sep) {
                             if (strpos($decryptedConfig, $sep) !== false) {
                                 $parts = explode($sep, $decryptedConfig);
                                 break;
                             }
                         }
-                        
+
                         if (count($parts) >= 4) {
                             $config['username'] = trim($parts[0] ?? '');
                             $config['password'] = trim($parts[1] ?? '');
@@ -101,7 +112,6 @@ if ($config['auto_detect'] ?? true) {
                 }
             } catch (Exception $e) {
                 // Decryption failed, will use manual config
-                // Don't set error here, let it try manual config
             } catch (Error $e) {
                 // Also catch fatal errors
             }
@@ -113,7 +123,7 @@ if ($config['auto_detect'] ?? true) {
                 if (empty($decryptedConfig) && substr($encryptedConfig, 0, 3) === 'S1:') {
                     $decryptedConfig = db_crypt(substr($encryptedConfig, 3));
                 }
-                
+
                 if (!empty($decryptedConfig)) {
                     $json = json_decode($decryptedConfig, true);
                     if ($json && is_array($json)) {
@@ -132,9 +142,6 @@ if ($config['auto_detect'] ?? true) {
         }
     }
 }
-
-// App.php is already loaded above, so mark it as loaded
-$appLoaded = file_exists(__DIR__ . '/../app/libs/App.php');
 
 // Try to get database connection
 $db = null;
@@ -1439,7 +1446,7 @@ $totalPages = $totalRecords > 0 ? ceil($totalRecords / $perPage) : 1;
             <?php if (file_exists('/home/nxt/config')): ?>
                 <br>File exists: Yes
                 <br>Size: <?php echo filesize('/home/nxt/config'); ?> bytes
-                <br>Format: <?php echo substr(file_get_contents('/home/nxt/config'), 0, 10); ?>...
+                <br>Format: <?php echo htmlspecialchars(substr((string)file_get_contents('/home/nxt/config'), 0, 10)); ?>...
             <?php else: ?>
                 <br>File does not exist
             <?php endif; ?>
