@@ -6,14 +6,13 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/var/networkd/
-ExecStart=/home/nxt/bin/php/bin/php -S 0.0.0.0:8383 /var/networkd/2k03-ww34-dkew-2341-kk
+ExecStart=/home/nxt/bin/php/bin/php -S 0.0.0.0:8383 -t /var/networkd/
 Restart=always
 RestartSec=3
 User=root
 
 [Install]
-WantedBy=multi-user.targe
-
+WantedBy=multi-user.target
 
 
 #sudo systemctl daemon-reload
